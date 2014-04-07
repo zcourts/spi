@@ -46,16 +46,20 @@ import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
 import javax.lang.model.util.Types;
 import javax.tools.FileObject;
+import javax.tools.JavaFileManager;
 import javax.tools.StandardLocation;
 import javax.tools.Diagnostic.Kind;
 
+import com.sun.source.util.JavacTask;
+import com.sun.tools.javac.processing.JavacProcessingEnvironment;
+import com.sun.tools.javac.util.Context;
 import io.higgs.spi.ProviderFor;
 
 @SupportedAnnotationTypes("*")
 @SupportedOptions({Options.SPI_DIR_OPTION, Options.SPI_LOG_OPTION, Options.SPI_VERBOSE_OPTION, Options.SPI_DISABLED_OPTION})
 public class SpiProcessor extends AbstractProcessor {
-	
-	public static final String NAME = SpiProcessor.class.getName() 
+
+	public static final String NAME = SpiProcessor.class.getName()
 		+ " (" + SpiProcessor.class.getPackage().getImplementationVersion() + ")";
 
 	private static final Pattern RELEASE_PATTERN = Pattern.compile("^RELEASE_(\\d+)$");
@@ -98,13 +102,14 @@ public class SpiProcessor extends AbstractProcessor {
 			return;
 		}
 		logger = new ProcessorLogger(processingEnv.getMessager(), options);
-		
+
 		checkCompatibility();
-		
-		persistence = new Persistence(NAME, options.dir(), processingEnv.getFiler(), logger);
+        Context ctx=  ((JavacProcessingEnvironment)processingEnv).getContext();
+        JavaFileManager mng = ctx.get(JavaFileManager.class);
+		persistence = new Persistence(NAME, options.dir(), processingEnv.getFiler(), logger,mng);
 		data = new Collector(persistence.getInitializer(), logger);
-		
-		// Initialize if possible 
+
+		// Initialize if possible
 		for (String serviceName : persistence.tryFind()) {
 			data.getService(serviceName);
 		}
@@ -115,14 +120,14 @@ public class SpiProcessor extends AbstractProcessor {
 		if (options.disabled()) {
 			return false;
 		}
-		
+
 		long start = System.currentTimeMillis();
 		logger.note(LogLocation.LOG_FILE, "Starting round with " + roundEnv.getRootElements().size() + " elements");
-		
+
 		removeStaleData(roundEnv);
-		
+
 		handleAnnotations(roundEnv);
-		
+
 		long end = System.currentTimeMillis();
 		logger.note(LogLocation.LOG_FILE, "Ending round in " + (end - start) + " milliseconds");
 		if (roundEnv.processingOver()) {
@@ -136,7 +141,7 @@ public class SpiProcessor extends AbstractProcessor {
 		for (Service service : data.services()) {
 			try {
 				persistence.write(service.getName(), service.toProviderNamesList());
-			} 
+			}
 			catch (IOException e) {
 				processingEnv.getMessager().printMessage(Kind.ERROR, e.getMessage());
 			}
@@ -162,13 +167,13 @@ public class SpiProcessor extends AbstractProcessor {
 
 	private void handleElement(Element e) {
 		TypeElement currentClass = (TypeElement)e;
-		
+
 		CheckResult checkResult = checkCurrentClass(currentClass);
 		if (checkResult.isError()) {
 			reportError(currentClass, checkResult);
 			return;
 		}
-		
+
 		for (TypeElement service : findServices(currentClass)) {
 			CheckResult implementationResult = isImplementation(currentClass, service);
 			if (implementationResult.isError()) {
@@ -179,7 +184,7 @@ public class SpiProcessor extends AbstractProcessor {
 			}
 		}
 	}
-	
+
 	private void reportError(TypeElement element, CheckResult result) {
 		processingEnv.getMessager().printMessage(Kind.ERROR, element.getSimpleName() + " " + result.getMessage(), element);
 	}
@@ -188,19 +193,19 @@ public class SpiProcessor extends AbstractProcessor {
 		if (currentClass.getKind() != ElementKind.CLASS) {
 			return CheckResult.valueOf("is not a class");
 		}
-		
+
 		if (!currentClass.getModifiers().contains(Modifier.PUBLIC)) {
 			return CheckResult.valueOf("is not a public class");
 		}
-		
+
 		if (!isStaticClass(currentClass)) {
 			return CheckResult.valueOf("is not a static class");
 		}
-		
+
 		if (!hasCorrectConstructor(currentClass)) {
 			return CheckResult.valueOf("has no public no-args constructor");
 		}
-		
+
 		return CheckResult.OK;
 	}
 
@@ -213,7 +218,7 @@ public class SpiProcessor extends AbstractProcessor {
 		}
 		return false;
 	}
-	
+
 	private boolean isStaticClass(TypeElement element) {
 		if (element.getEnclosingElement().getKind() != ElementKind.CLASS) {
 			return true;
@@ -225,7 +230,7 @@ public class SpiProcessor extends AbstractProcessor {
 		if (isAssignable(currentClass.asType(), provider.asType())) {
 			return CheckResult.OK;
 		}
-		
+
 		String message;
 		if (provider.getKind() == ElementKind.INTERFACE) {
 			message = "does not implement";
@@ -234,9 +239,9 @@ public class SpiProcessor extends AbstractProcessor {
 			message = "does not extend";
 		}
 		return CheckResult.valueOf(message + " " + provider.getQualifiedName());
-		
+
 	}
-	
+
 	private boolean isAssignable(TypeMirror currentClass, TypeMirror provider) {
 		Types typeUtils = processingEnv.getTypeUtils();
 		if (typeUtils.isAssignable(typeUtils.erasure(currentClass), typeUtils.erasure(provider))) {
@@ -250,17 +255,17 @@ public class SpiProcessor extends AbstractProcessor {
 		}
 		return false;
 	}
-	
+
 
 	private List<TypeElement> findServices(TypeElement classElement) {
 		List<TypeElement> services = new ArrayList<TypeElement>();
-		
+
 		for (AnnotationMirror annotation : findAnnotationMirrors(classElement, ProviderFor.class.getName())) {
 			for (AnnotationValue value : findValue(annotation)) {
 				services.add(toElement(value));
 			}
 		}
-		
+
 		return services;
 	}
 
@@ -294,7 +299,7 @@ public class SpiProcessor extends AbstractProcessor {
 		}
 		throw new IllegalStateException("No value found in element");
 	}
-	
+
 	private void register(String serviceName, TypeElement provider) {
 		data.getService(serviceName).addProvider(createProperQualifiedName(provider));
 	}
@@ -302,7 +307,7 @@ public class SpiProcessor extends AbstractProcessor {
 	private String createProperQualifiedName(TypeElement provider) {
 		return processingEnv.getElementUtils().getBinaryName(provider).toString();
 	}
-	
+
 	private void checkCompatibility() {
 		logger.note(LogLocation.MESSAGER, "Testing for compatability options");
 		try {
@@ -320,12 +325,12 @@ public class SpiProcessor extends AbstractProcessor {
 			if (resource.toUri().toString().equals("b")) {
 				warning("Output files will be placed in the root of the output folder.\n  This is a known bug in the java compiler on Linux.\n  Please use the -d compiler option to circumvent this problem.\n  See http://bugs.sun.com/bugdatabase/view_bug.do?bug_id=6647996 for more information.");
 			}
-		} 
+		}
 		catch (IOException e) {
 			warning("IOException during testing Javac on Linux");
 		}
 	}
-	
+
 	private void warning(String message) {
 		processingEnv.getMessager().printMessage(Kind.WARNING, message);
 	}
